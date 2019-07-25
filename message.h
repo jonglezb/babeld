@@ -50,6 +50,7 @@ extern int split_horizon;
 extern unsigned char packet_header[4];
 
 void parse_packet(const unsigned char *from, struct interface *ifp,
+		  struct timeval *rx_timestamp,
                   const unsigned char *packet, int packetlen);
 void flushbuf(struct buffered *buf, struct interface *ifp);
 void flushupdates(struct interface *ifp);

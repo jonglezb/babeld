@@ -441,7 +441,8 @@ network_address(int ae, const unsigned char *a, unsigned int len,
 
 void
 parse_packet(const unsigned char *from, struct interface *ifp,
-             const unsigned char *packet, int packetlen)
+	     struct timeval *rx_timestamp,
+	     const unsigned char *packet, int packetlen)
 {
     int i;
     const unsigned char *message;
@@ -456,10 +457,17 @@ parse_packet(const unsigned char *from, struct interface *ifp,
     /* Content of the RTT sub-TLV on IHU messages. */
     unsigned int hello_send_us = 0, hello_rtt_receive_time = 0;
 
-    if((ifp->flags & IF_TIMESTAMPS) != 0) {
-        /* We want to track exactly when we received this packet. */
+    /* TODO: since kernel timestamps and userspace timestamps use a
+       different clock, we would need to remember which clock we used here
+       (to use the same clock for timestamps in outgoing Hello messages) */
+    if((ifp->flags & IF_TIMESTAMPS) != 0 && rx_timestamp->tv_sec == 0 &&
+       rx_timestamp->tv_usec == 0) {
+        /* If we couldn't get kernel timestamps, let's timestamp ourselves. */
+        debugf("Kernel timestamps unavailable, using userspace timestamp\n");
         gettime(&now);
+	rx_timestamp = &now;
     }
+    debugf("RX timestamp: %u\n", time_us(*rx_timestamp));
 
     if(!linklocal(from)) {
         fprintf(stderr, "Received packet from non-local address %s.\n",
@@ -563,7 +571,7 @@ parse_packet(const unsigned char *from, struct interface *ifp,
                 schedule_neighbours_check(interval * 15, 0);
             if(have_timestamp) {
                 neigh->hello_send_us = timestamp;
-                neigh->hello_rtt_receive_time = now;
+                neigh->hello_rtt_receive_time = *rx_timestamp;
                 have_hello_rtt = 1;
             }
         } else if(type == MESSAGE_IHU) {
@@ -588,7 +596,7 @@ parse_packet(const unsigned char *from, struct interface *ifp,
                     goto done;
                 changed = txcost != neigh->txcost;
                 neigh->txcost = txcost;
-                neigh->ihu_time = now;
+                neigh->ihu_time = *rx_timestamp;
                 neigh->ihu_interval = interval;
                 update_neighbour_metric(neigh, changed);
                 if(interval > 0)
@@ -856,6 +864,8 @@ parse_packet(const unsigned char *from, struct interface *ifp,
         local_waiting_us = time_us(neigh->hello_rtt_receive_time) -
             hello_send_us;
 
+	debugf("remote_waiting_us: %u\n", remote_waiting_us);
+	debugf("local_waiting_us: %u\n", local_waiting_us);
         /* Sanity checks (validity window of 10 minutes). */
         if(remote_waiting_us < 0 || local_waiting_us < 0 ||
            remote_waiting_us > 600000000 || local_waiting_us > 600000000)
@@ -895,7 +905,14 @@ fill_rtt_message(struct buffered *buf, struct interface *ifp)
             unsigned int time;
             /* Change the type of sub-TLV. */
             buf->buf[buf->hello + 8] = SUBTLV_TIMESTAMP;
-            gettime(&now);
+	    /* Since kernel timestamps for received messages are using the
+	       realtime clock, we must use the same clock for outgoing
+	       timestamps (instead of the usual monotonic clock).  This is
+	       not ideal, and we should probably apply the same "enforce
+	       monotonicity manually" technique implemented in gettime()
+	       when monotonic clock is not available. */
+            //gettime(&now);
+	    gettimeofday(&now, NULL);
             time = time_us(now);
             DO_HTONL(buf->buf + buf->hello + 10, time);
             return 1;

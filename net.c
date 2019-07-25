@@ -84,6 +84,18 @@ babel_socket(int port)
     if(rc < 0)
         perror("Couldn't set traffic class");
 
+#ifdef SO_TIMESTAMP
+    /* We could use SO_TIMESTAMPNS to get nanosecond resolution, but it's
+       useless: we currently send timestamps with a microsecond
+       resolution anyway. */
+    rc = setsockopt(s, SOL_SOCKET, SO_TIMESTAMP, &one, sizeof(one));
+#else
+    rc = -1;
+    errno = ENOSYS;
+#endif
+    if(rc < 0)
+        perror("Couldn't set kernel timestamps");
+
     rc = fcntl(s, F_GETFL, 0);
     if(rc < 0)
         goto fail;
@@ -117,10 +129,14 @@ babel_socket(int port)
 }
 
 int
-babel_recv(int s, void *buf, int buflen, struct sockaddr *sin, int slen)
+babel_recv(int s, void *buf, int buflen, struct timeval *timestamp,
+	   struct sockaddr *sin, int slen)
 {
     struct iovec iovec;
     struct msghdr msg;
+    char cmsg_buf[32];
+    struct cmsghdr *cmsg;
+    struct timeval *tv;
     int rc;
 
     memset(&msg, 0, sizeof(msg));
@@ -130,8 +146,23 @@ babel_recv(int s, void *buf, int buflen, struct sockaddr *sin, int slen)
     msg.msg_namelen = slen;
     msg.msg_iov = &iovec;
     msg.msg_iovlen = 1;
+    msg.msg_control = cmsg_buf;
+    msg.msg_controllen = sizeof(cmsg_buf);
 
     rc = recvmsg(s, &msg, 0);
+    if (rc >= 0) {
+	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg;
+	     cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+	    if (cmsg->cmsg_level == SOL_SOCKET &&
+		cmsg->cmsg_type == SO_TIMESTAMP) {
+		tv = (struct timeval *)CMSG_DATA(cmsg);
+		/* Copy timestamp to the caller */
+		timestamp->tv_sec = tv->tv_sec;
+		timestamp->tv_usec = tv->tv_usec;
+		debugf("Kernel timestamp: %u\n", time_us(*timestamp));
+	    }
+	}
+    }
     return rc;
 }
 

@@ -152,6 +152,7 @@ main(int argc, char **argv)
     int num_config_files = 0;
     void *vrc;
     unsigned int seed;
+    struct timeval rx_timestamp;
     struct interface *ifp;
 
     gettime(&now);
@@ -661,8 +662,10 @@ main(int argc, char **argv)
         }
 
         if(FD_ISSET(protocol_socket, &readfds)) {
+	    memset(&rx_timestamp, 0, sizeof(rx_timestamp));
             rc = babel_recv(protocol_socket,
                             receive_buffer, receive_buffer_size,
+			    &rx_timestamp,
                             (struct sockaddr*)&sin6, sizeof(sin6));
             if(rc < 0) {
                 if(errno != EAGAIN && errno != EINTR) {
@@ -675,7 +678,7 @@ main(int argc, char **argv)
                         continue;
                     if(ifp->ifindex == sin6.sin6_scope_id) {
                         parse_packet((unsigned char*)&sin6.sin6_addr, ifp,
-                                     receive_buffer, rc);
+				     &rx_timestamp, receive_buffer, rc);
                         VALGRIND_MAKE_MEM_UNDEFINED(receive_buffer,
                                                     receive_buffer_size);
                         break;
